@@ -16,19 +16,16 @@ class CURRENCY_TYPE(Enum):
     eur = 'eur'
 
 class Product(db.Model):
-
     __tablename__ = 'products'
 
-    id            = db.Column(db.Integer,      primary_key=True)
-    name          = db.Column(db.String(128),  nullable=False)
-    info          = db.Column(db.Text,         nullable=True)
-    price         = db.Column(db.Integer,      nullable=False)
-    currency      = db.Column(db.Enum(CURRENCY_TYPE), default=CURRENCY_TYPE.usd, nullable=False)
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+    info = db.Column(db.Text, nullable=True)
+    price = db.Column(db.Integer, nullable=False)
+    currency = db.Column(db.Enum(CURRENCY_TYPE), default=CURRENCY_TYPE.usd, nullable=False)
+    date_created = db.Column(db.DateTime, default=dt.datetime.utcnow())
+    date_modified = db.Column(db.DateTime, default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
 
-    date_created  = db.Column(db.DateTime,     default=dt.datetime.utcnow())
-    date_modified = db.Column(db.DateTime,     default=db.func.current_timestamp(),
-                                               onupdate=db.func.current_timestamp())
-    
     def __init__(self, **kwargs):
         super(Product, self).__init__(**kwargs)
 
@@ -37,7 +34,7 @@ class Product(db.Model):
 
     @classmethod
     def find_by_id(cls, _id: int) -> "Product":
-        return cls.query.filter_by(id=_id).first() 
+        return cls.query.filter_by(id=_id).first()
 
     @classmethod
     def get_list(cls):
@@ -62,16 +59,19 @@ class Product(db.Model):
             db.session.close()
             error = str(e.__dict__['orig'])
             raise InvalidUsage(error, 422)
-        return
 
 class User(db.Model):
     __tablename__ = 'users'
+    __table_args__ = {'extend_existing': True}
+
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False)
     created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
 class ActivityLog(db.Model):
     __tablename__ = 'activity_logs'
+    __table_args__ = {'extend_existing': True}
+
     id = db.Column(db.Integer, primary_key=True)
     event = db.Column(db.String(255), nullable=False)
     created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
