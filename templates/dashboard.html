@@ -1,0 +1,26 @@
+{% extends "layouts/base.html" %}
+{% block content %}
+<div class="row">
+    <div class="col">
+        <h2>Dashboard</h2>
+        <canvas id="statsChart"></canvas>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+fetch('/dashboard/stats').then(r => r.json()).then(data => {
+    const ctx = document.getElementById('statsChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Total Users', 'Activity Logs'],
+            datasets: [{
+                label: 'Counts',
+                data: [data.total_users, data.logs],
+            }]
+        },
+        options: {}
+    });
+});
+</script>
+{% endblock %}
