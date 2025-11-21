@@ -63,3 +63,15 @@ class Product(db.Model):
             error = str(e.__dict__['orig'])
             raise InvalidUsage(error, 422)
         return
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
+
+class ActivityLog(db.Model):
+    __tablename__ = 'activity_logs'
+    id = db.Column(db.Integer, primary_key=True)
+    event = db.Column(db.String(255), nullable=False)
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
