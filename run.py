@@ -1,67 +1,23 @@
-# -*- encoding: utf-8 -*-
-"""
-Copyright (c) 2019 - present AppSeed.us
-"""
-
 import os
-from   flask_migrate import Migrate
-from   flask_minify  import Minify
-from   sys import exit
-
-from apps.config import config_dict
-from apps import create_app, db
-
-# WARNING: Don't run with debug turned on in production!
-DEBUG = (os.getenv('DEBUG', 'False') == 'True')
-
-# The configuration
-get_config_mode = 'Debug' if DEBUG else 'Production'
-
-try:
-
-    # Load the configuration using the default values
-    app_config = config_dict[get_config_mode.capitalize()]
-
-except KeyError:
-    exit('Error: Invalid <config_mode>. Expected values [Debug, Production] ')
-
-app = create_app(app_config)
-
-from flask import render_template
-
-@app.route("/")
-def root_index():
-    # Página inicial simples SEM redirect, só render template
-    return render_template("home/ai_dashboard.html")
+from apps import create_app
+from config import Config
 
 
-# Create tables & Fallback to SQLite
-with app.app_context():
-    
-    try:
-        db.create_all()
-    except Exception as e:
+def get_port():
+    """Determine port from environment or default to 5000."""
+    return int(os.environ.get("PORT", os.environ.get("FLASK_RUN_PORT", 5000)))
 
-        print('> Error: DBMS Exception: ' + str(e) )
 
-        # fallback to SQLite
-        basedir = os.path.abspath(os.path.dirname(__file__))
-        app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI = 'sqlite:///' + os.path.join(basedir, 'db.sqlite3')
+def get_debug():
+    """Determine debug mode from FLASK_DEBUG env var (defaults to False)."""
+    return os.environ.get("FLASK_DEBUG", "0") == "1"
 
-        print('> Fallback to SQLite ')
-        db.create_all()
 
-# Apply all changes
-Migrate(app, db)
+# Create the Flask application using the Config class
+app = create_app(Config)
 
-if not DEBUG:
-    Minify(app=app, html=True, js=False, cssless=False)
-    
-if DEBUG:
-    app.logger.info('DEBUG            = ' + str(DEBUG)             )
-    app.logger.info('Page Compression = ' + 'FALSE' if DEBUG else 'TRUE' )
-    app.logger.info('DBMS             = ' + app_config.SQLALCHEMY_DATABASE_URI)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
-
+if __name__ == '__main__':
+    port = get_port()
+    debug = get_debug()
+    # Run the app on 0.0.0.0 to be accessible externally if needed
+    app.run(host='0.0.0.0', port=port, debug=debug, use_reloader=False)
