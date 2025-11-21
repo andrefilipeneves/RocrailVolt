@@ -1,12 +1,13 @@
 from flask import jsonify
 from . import blueprint
-from ..models import User, ActivityLog
+from apps.authentication.models import Users
+from ..models import ActivityLog
 
 @blueprint.route('/users')
 def list_users():
-    users = User.query.all()
+    users = Users.query.all()
     return jsonify([
-        {'id': u.id, 'email': u.email, 'created_at': u.created_at.isoformat()} for u in users
+        {'id': u.id, 'username': u.username, 'email': u.email} for u in users
     ])
 
 @blueprint.route('/activity')
