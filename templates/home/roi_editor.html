@@ -1,0 +1,347 @@
+{% extends "layouts/base.html" %}
+{% block title %}ROI Editor{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+
+  <!-- Área principal: imagem + canvas -->
+  <div class="col-12 col-xl-8">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">ROI Editor</h2>
+          <small class="text-muted">
+            Clica na imagem para desenhar o polígono do bloco selecionado.
+          </small>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary" onclick="reloadROIs()">Recarregar ROIs</button>
+          <button class="btn btn-sm btn-primary" onclick="exportROIs()">Exportar JSON</button>
+        </div>
+      </div>
+      <div class="card-body text-center">
+        <div id="roiContainer" style="position:relative; display:inline-block; max-width:100%;">
+          <!-- Imagem de base do layout (ajusta o ficheiro se necessário) -->
+          <img id="roiBase"
+               src="{{ url_for('static', filename='layouts/default_map.png') }}"
+               class="img-fluid border rounded"
+               style="display:block; max-width:100%;">
+
+          <!-- Canvas por cima da imagem -->
+          <canvas id="roiCanvas"
+                  style="position:absolute; top:0; left:0; pointer-events:auto;">
+          </canvas>
+        </div>
+        <small class="text-muted d-block mt-2">
+          Botão esquerdo: adicionar ponto ? Shift+clique: remover ponto mais próximo ?
+          Botão direito: limpar último ponto
+        </small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Painel lateral: lista de blocos + JSON -->
+  <div class="col-12 col-xl-4">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Blocos (ROIs)</h2>
+        <div class="btn-group btn-group-sm">
+          <button class="btn btn-outline-success" onclick="addBlock()">Novo bloco</button>
+          <button class="btn btn-outline-danger" onclick="deleteBlock()">Apagar bloco</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="blockList" class="small" style="max-height:260px; overflow-y:auto;">
+          <!-- preenchido por JS -->
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">JSON (rois.json)</h2>
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyJson()">Copiar</button>
+      </div>
+      <div class="card-body">
+        <pre id="roiJsonPreview"
+             class="small bg-dark text-light rounded p-2"
+             style="max-height:240px; overflow-y:auto;"></pre>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let roiImg;          // imagem base
+let roiCanvas;       // canvas
+let roiCtx;
+let ROIS = {};       // { "BLOCK1": [[x,y], [x,y], ...], ... }
+let currentBlock = null;
+
+// Vamos usar coordenadas em pixels do canvas (matching com a imagem renderizada)
+let canvasWidth = 0;
+let canvasHeight = 0;
+
+// URL para ler o rois.json atual
+const ROIS_URL = "{{ url_for('static', filename='layouts/rois.json') }}";
+
+// ---------- Inicialização ----------
+
+window.addEventListener("load", () => {
+  roiImg = document.getElementById("roiBase");
+  roiCanvas = document.getElementById("roiCanvas");
+  roiCtx = roiCanvas.getContext("2d");
+
+  // redimensionar o canvas quando a imagem carregar
+  function syncCanvasToImage() {
+    const rect = roiImg.getBoundingClientRect();
+    roiCanvas.width = rect.width;
+    roiCanvas.height = rect.height;
+    canvasWidth = rect.width;
+    canvasHeight = rect.height;
+    drawROIs();
+  }
+
+  if (roiImg.complete) {
+    syncCanvasToImage();
+  } else {
+    roiImg.onload = syncCanvasToImage;
+  }
+
+  // Atualizar canvas ao redimensionar janela
+  window.addEventListener("resize", syncCanvasToImage);
+
+  // Eventos de clique no canvas
+  roiCanvas.addEventListener("click", onCanvasClick);
+  roiCanvas.addEventListener("contextmenu", function(ev) {
+    ev.preventDefault();
+    removeLastPoint();
+    return false;
+  });
+
+  reloadROIs();
+});
+
+// ---------- Carregar / desenhar ROIs ----------
+
+async function reloadROIs() {
+  try {
+    const res = await fetch(ROIS_URL + "?_ts=" + Date.now());
+    if (!res.ok) {
+      console.warn("rois.json não encontrado ou erro HTTP:", res.status);
+      ROIS = {};
+    } else {
+      ROIS = await res.json();
+    }
+  } catch (e) {
+    console.error("Erro a ler rois.json:", e);
+    ROIS = {};
+  }
+
+  // Selecionar primeiro bloco se nenhum estiver ativo
+  const keys = Object.keys(ROIS);
+  if (!currentBlock && keys.length > 0) {
+    currentBlock = keys[0];
+  }
+
+  renderBlockList();
+  updateJsonPreview();
+  drawROIs();
+}
+
+function drawROIs() {
+  if (!roiCtx || !roiCanvas) return;
+
+  roiCtx.clearRect(0, 0, roiCanvas.width, roiCanvas.height);
+
+  // fundo transparente para ver a imagem
+  // desenhar todos os blocos
+  for (const [name, pts] of Object.entries(ROIS)) {
+    if (!pts || pts.length < 2) continue;
+
+    const isCurrent = (name === currentBlock);
+
+    roiCtx.beginPath();
+    pts.forEach((p, idx) => {
+      const x = p[0];
+      const y = p[1];
+      if (idx === 0) {
+        roiCtx.moveTo(x, y);
+      } else {
+        roiCtx.lineTo(x, y);
+      }
+    });
+    roiCtx.closePath();
+
+    roiCtx.lineWidth = isCurrent ? 3 : 2;
+    roiCtx.strokeStyle = isCurrent ? "rgba(59,130,246,0.95)" : "rgba(34,197,94,0.85)";
+    roiCtx.stroke();
+
+    // pontos
+    pts.forEach(p => {
+      const x = p[0];
+      const y = p[1];
+      roiCtx.beginPath();
+      roiCtx.arc(x, y, 4, 0, 2 * Math.PI);
+      roiCtx.fillStyle = isCurrent ? "rgba(59,130,246,0.95)" : "rgba(34,197,94,0.9)";
+      roiCtx.fill();
+    });
+
+    // label
+    const first = pts[0];
+    roiCtx.font = "11px sans-serif";
+    roiCtx.fillStyle = "rgba(15,23,42,0.9)";
+    roiCtx.fillText(name, first[0] + 6, first[1] - 4);
+  }
+}
+
+// ---------- Lista de blocos & seleção ----------
+
+function renderBlockList() {
+  const cont = document.getElementById("blockList");
+  cont.innerHTML = "";
+
+  const keys = Object.keys(ROIS).sort();
+
+  if (!keys.length) {
+    cont.textContent = "Nenhum bloco definido ainda. Clica em 'Novo bloco' para criar um.";
+    return;
+  }
+
+  keys.forEach(name => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm w-100 mb-1 " +
+                    (name === currentBlock ? "btn-primary" : "btn-outline-secondary");
+    btn.textContent = name + " (" + (ROIS[name]?.length || 0) + " pontos)";
+    btn.onclick = () => {
+      currentBlock = name;
+      renderBlockList();
+      drawROIs();
+    };
+    cont.appendChild(btn);
+  });
+}
+
+function addBlock() {
+  const name = prompt("Nome do novo bloco (ex: B1, BLOCK_A, etc.):");
+  if (!name) return;
+  if (ROIS[name]) {
+    alert("Já existe um bloco com esse nome.");
+    return;
+  }
+  ROIS[name] = [];
+  currentBlock = name;
+  renderBlockList();
+  updateJsonPreview();
+  drawROIs();
+}
+
+function deleteBlock() {
+  if (!currentBlock) {
+    alert("Nenhum bloco selecionado.");
+    return;
+  }
+  if (!confirm("Apagar o bloco '" + currentBlock + "'?")) return;
+
+  delete ROIS[currentBlock];
+  const keys = Object.keys(ROIS);
+  currentBlock = keys.length ? keys[0] : null;
+  renderBlockList();
+  updateJsonPreview();
+  drawROIs();
+}
+
+// ---------- Edição de pontos no canvas ----------
+
+function onCanvasClick(ev) {
+  if (!currentBlock) {
+    alert("Cria ou seleciona primeiro um bloco.");
+    return;
+  }
+
+  const rect = roiCanvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const y = ev.clientY - rect.top;
+
+  // Se Shift estiver pressionado: remover ponto mais próximo
+  if (ev.shiftKey) {
+    removeNearestPoint(x, y);
+    return;
+  }
+
+  // Caso normal: adicionar ponto
+  if (!ROIS[currentBlock]) {
+    ROIS[currentBlock] = [];
+  }
+  ROIS[currentBlock].push([x, y]);
+  updateJsonPreview();
+  drawROIs();
+}
+
+function removeLastPoint() {
+  if (!currentBlock || !ROIS[currentBlock] || !ROIS[currentBlock].length) return;
+  ROIS[currentBlock].pop();
+  updateJsonPreview();
+  drawROIs();
+}
+
+function removeNearestPoint(x, y) {
+  if (!currentBlock || !ROIS[currentBlock] || !ROIS[currentBlock].length) return;
+  const pts = ROIS[currentBlock];
+  let bestIndex = -1;
+  let bestDist2 = Infinity;
+
+  pts.forEach((p, idx) => {
+    const dx = p[0] - x;
+    const dy = p[1] - y;
+    const d2 = dx*dx + dy*dy;
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      bestIndex = idx;
+    }
+  });
+
+  if (bestIndex >= 0) {
+    pts.splice(bestIndex, 1);
+    updateJsonPreview();
+    drawROIs();
+  }
+}
+
+// ---------- JSON (preview / copiar / exportar) ----------
+
+function updateJsonPreview() {
+  const pre = document.getElementById("roiJsonPreview");
+  pre.textContent = JSON.stringify(ROIS, null, 2);
+}
+
+function copyJson() {
+  const text = JSON.stringify(ROIS, null, 2);
+  navigator.clipboard.writeText(text).then(
+    () => alert("JSON copiado para a área de transferência."),
+    () => alert("Não foi possível copiar o JSON.")
+  );
+}
+
+function exportROIs() {
+  const dataStr = JSON.stringify(ROIS, null, 2);
+  const blob = new Blob([dataStr], {type: "application/json"});
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "rois.json";
+  document.body.appendChild(a);
+  a.click();
+
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 0);
+}
+</script>
+
+{% endblock content %}

@@ -1,0 +1,164 @@
+{% extends "layouts/base.html" %}
+{% block title %}AI Control Center{% endblock title %}
+
+{% block content %}
+
+<div class="row">
+  <!-- Left: YOLO video -->
+  <div class="col-12 col-xl-8 mb-4">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">YOLO Vision</h2>
+          <small class="text-muted">IP Camera + Object Detection</small>
+        </div>
+        <span class="badge bg-success-soft text-success">LIVE</span>
+      </div>
+      <div class="card-body text-center p-2">
+        <img src="{{ url_for('home_blueprint.video_feed') }}" class="img-fluid rounded" alt="YOLO Video">
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: controls -->
+  <div class="col-12 col-xl-4 mb-4">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Train Control (Rocrail)</h2>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Loco ID</label>
+          <input type="text" id="locoIdInput" class="form-control" value="{{ loco_default }}">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Speed (%)</label>
+          <input type="number" id="speedInput" class="form-control" value="40" min="0" max="100">
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="btn btn-primary btn-sm" onclick="trainGo()">GO</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="trainPreset('slow')">Slow</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="trainPreset('cruise')">Cruise</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="trainPreset('fast')">Fast</button>
+          <button class="btn btn-danger btn-sm" onclick="trainStop()">STOP</button>
+          <button class="btn btn-warning btn-sm" onclick="trainEmergency()">EMERGENCY</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">RC Car</h2>
+        <div class="form-check form-switch m-0">
+          <input class="form-check-input" type="checkbox" id="autoModeSwitch" onchange="toggleAutoMode()">
+          <label class="form-check-label small" for="autoModeSwitch">AI Mode</label>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">Steering (-1 .. 1)</label>
+          <input type="range" class="form-range" id="carSteering" min="-1" max="1" step="0.1" value="0">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Throttle (0 .. 1)</label>
+          <input type="range" class="form-range" id="carThrottle" min="0" max="1" step="0.1" value="0">
+        </div>
+        <button class="btn btn-outline-primary btn-sm" onclick="carSendManual()">Send Manual Command</button>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Blocks State (YOLO)</h2>
+      </div>
+      <div class="card-body">
+        <div id="blocksList" class="small text-muted">Loading...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Simple JS scripts -->
+<script>
+function locoId() {
+  return document.getElementById('locoIdInput').value || "{{ loco_default }}";
+}
+
+async function trainStop() {
+  await fetch("{{ url_for('home_blueprint.api_train_stop') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({loco_id: locoId()})
+  });
+}
+
+async function trainGo() {
+  const speed = parseInt(document.getElementById('speedInput').value || "40");
+  await fetch("{{ url_for('home_blueprint.api_train_go') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({loco_id: locoId(), speed})
+  });
+}
+
+async function trainPreset(preset) {
+  await fetch("{{ url_for('home_blueprint.api_train_preset_speed') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({loco_id: locoId(), preset})
+  });
+}
+
+async function trainEmergency() {
+  await fetch("{{ url_for('home_blueprint.api_train_emergency_stop') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"}
+  });
+}
+
+async function carSendManual() {
+  const steering = parseFloat(document.getElementById('carSteering').value || "0");
+  const throttle = parseFloat(document.getElementById('carThrottle').value || "0");
+  await fetch("{{ url_for('home_blueprint.api_car_command') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({mode: "manual", steering, throttle})
+  });
+}
+
+async function toggleAutoMode() {
+  const checked = document.getElementById('autoModeSwitch').checked;
+  await fetch("{{ url_for('home_blueprint.api_auto_mode') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({enabled: checked})
+  });
+}
+
+async function refreshBlocks() {
+  const res = await fetch("{{ url_for('home_blueprint.api_blocks') }}");
+  const data = await res.json();
+  const container = document.getElementById('blocksList');
+  container.innerHTML = "";
+  const keys = Object.keys(data).sort();
+  if (keys.length === 0) {
+    container.textContent = "No blocks defined (configure ROIs in yolo_core.py).";
+    return;
+  }
+  keys.forEach(name => {
+    const occ = !!data[name];
+    const div = document.createElement('div');
+    div.className = "d-flex justify-content-between align-items-center mb-1";
+    div.innerHTML = `
+      <span>${name}</span>
+      <span class="badge ${occ ? 'bg-danger-soft text-danger' : 'bg-success-soft text-success'}">
+        ${occ ? 'OCCUPIED' : 'FREE'}
+      </span>`;
+    container.appendChild(div);
+  });
+}
+setInterval(refreshBlocks, 1000);
+refreshBlocks();
+</script>
+
+{% endblock content %}

@@ -1,0 +1,123 @@
+{% extends "layouts/base.html" %}
+{% block title %}CS3 Status{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+  <div class="col-12 col-xl-6">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">CS3 Connection</h2>
+          <small class="text-muted">Estado da ligação à Märklin CS3</small>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="refreshStatus()">
+          Refresh
+        </button>
+      </div>
+      <div class="card-body">
+        <dl class="row mb-0 small">
+          <dt class="col-sm-4">Connected</dt>
+          <dd class="col-sm-8" id="cs3_connected">-</dd>
+
+          <dt class="col-sm-4">Host</dt>
+          <dd class="col-sm-8" id="cs3_host">-</dd>
+
+          <dt class="col-sm-4">Port</dt>
+          <dd class="col-sm-8" id="cs3_port">-</dd>
+
+          <dt class="col-sm-4">Last Error</dt>
+          <dd class="col-sm-8" id="cs3_last_error">-</dd>
+
+          <dt class="col-sm-4">Last Connect</dt>
+          <dd class="col-sm-8" id="cs3_last_connect">-</dd>
+
+          <dt class="col-sm-4">Locos</dt>
+          <dd class="col-sm-8" id="cs3_locos_count">-</dd>
+
+          <dt class="col-sm-4">Turnouts</dt>
+          <dd class="col-sm-8" id="cs3_turnouts_count">-</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-6">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Comandos rápidos</h2>
+        <button class="btn btn-sm btn-outline-secondary" onclick="refreshFromCS3()">
+          Refresh from CS3
+        </button>
+      </div>
+      <div class="card-body">
+        <div class="mb-2">
+          <label class="form-label">Turnout ID</label>
+          <input type="text" id="cs3_turnout_id" class="form-control form-control-sm" placeholder="Ex: SW1">
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Position</label>
+          <select id="cs3_turnout_pos" class="form-select form-select-sm">
+            <option value="straight">Straight</option>
+            <option value="turnout">Turnout</option>
+          </select>
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="sendTurnoutCommand()">
+          Enviar comando para CS3
+        </button>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Debug status JSON</h2>
+      </div>
+      <div class="card-body">
+        <pre id="cs3_status_json" class="small bg-dark text-light rounded p-2" style="max-height: 200px; overflow-y:auto;"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function refreshStatus() {
+  const res = await fetch("{{ url_for('home_blueprint.api_cs3_status') }}");
+  const data = await res.json();
+
+  document.getElementById("cs3_connected").textContent = data.connected ? "Yes" : "No";
+  document.getElementById("cs3_host").textContent = data.host || "-";
+  document.getElementById("cs3_port").textContent = data.port || "-";
+  document.getElementById("cs3_last_error").textContent = data.last_error || "-";
+  document.getElementById("cs3_last_connect").textContent = data.last_connect_time || "-";
+  document.getElementById("cs3_locos_count").textContent = data.locos_count;
+  document.getElementById("cs3_turnouts_count").textContent = data.turnouts_count;
+
+  document.getElementById("cs3_status_json").textContent = JSON.stringify(data, null, 2);
+}
+
+async function sendTurnoutCommand() {
+  const id = document.getElementById("cs3_turnout_id").value.trim();
+  const pos = document.getElementById("cs3_turnout_pos").value;
+  if (!id) {
+    alert("Indica o ID da agulha (turnout).");
+    return;
+  }
+  await fetch("{{ url_for('home_blueprint.api_cs3_turnout') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ id, position: pos })
+  });
+  alert("Comando enviado (ver logs no servidor).");
+}
+
+async function refreshFromCS3() {
+  await fetch("{{ url_for('home_blueprint.api_cs3_refresh') }}", {
+    method: "POST"
+  });
+  alert("Pedidos de refresh enviados (a implementar no cs3_client).");
+}
+
+window.addEventListener("load", refreshStatus);
+</script>
+
+{% endblock content %}

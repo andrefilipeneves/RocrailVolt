@@ -1,0 +1,428 @@
+{% extends "layouts/base.html" %}
+{% block title %}Layout Map{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+
+  <!-- MAPA PRINCIPAL -->
+  <div class="col-12 col-xl-8">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">Layout Map</h2>
+          <small class="text-muted">Blocos (ROIs) + Agulhas do Rocrail</small>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary" onclick="reloadLayout()">
+            Reload ROIs
+          </button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="reloadSwitches()">
+            Reload Switches
+          </button>
+        </div>
+      </div>
+
+      <div class="card-body text-center">
+        <div id="layoutContainer" style="position:relative; display:inline-block;">
+          <!-- IMAGEM DO LAYOUT -->
+          <img id="layoutImg"
+               src="{{ url_for('static', filename='layouts/default_map.png') }}"
+               class="img-fluid border rounded"
+               style="max-width: 100%;"
+               alt="Layout map">
+
+          <!-- Canvas overlay -->
+          <canvas id="layoutCanvas"
+                  style="position:absolute; top:0; left:0; pointer-events:auto;"></canvas>
+        </div>
+
+        <small class="text-muted d-block mt-2">
+          Imagem: <code>static/layouts/default_map.png</code> ·
+          ROIs: <code>static/layouts/rois.json</code> ·
+          Agulhas: <code>switches</code> do <code>plan.xml</code>.
+        </small>
+      </div>
+    </div>
+  </div>
+
+  <!-- PAINEL LATERAL -->
+  <div class="col-12 col-xl-4">
+
+    <!-- ESTADO DE BLOCOS -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Blocos (YOLO)</h2>
+        <small class="text-muted">Atualiza a cada 1s</small>
+      </div>
+      <div class="card-body">
+        <div id="blocksList" class="small text-muted">A carregar?</div>
+      </div>
+    </div>
+
+    <!-- CONTROLO DE AGULHAS -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Agulhas (Rocrail)</h2>
+        <small class="text-muted">Clique para straight/turnout</small>
+      </div>
+      <div class="card-body">
+        <div id="switchesList" class="small text-muted">A carregar?</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let canvas, ctx, img;
+let BLOCK_ROIS = {};    // do rois.json
+let BLOCK_STATES = {};  // do /api/blocks
+let SWITCHES = [];      // do /api/rocrail/switches
+let TRACKS = [];        // do /api/rocrail/tracks
+let SWITCH_POS = {};  // override visual das agulhas
+
+
+// Fator de escala opcional nos switches (se x,y do plan.xml forem noutra escala)
+const SWITCH_SCALE_X = 1.0;
+const SWITCH_SCALE_Y = 1.0;
+
+function initMap() {
+  img = document.getElementById("layoutImg");
+  canvas = document.getElementById("layoutCanvas");
+  ctx = canvas.getContext("2d");
+
+  const rect = img.getBoundingClientRect();
+  canvas.width = rect.width;
+  canvas.height = rect.height;
+
+  // Permitir clique para interagir com agulhas
+  canvas.addEventListener("click", onCanvasClick);
+
+  drawMap();
+}
+
+function drawMap() {
+  if (!ctx || !canvas) return;
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // --- desenhar VIA (tracks do Rocrail) ---
+  TRACKS.forEach(tr => {
+    const x = parseFloat(tr.x || "0");
+    const y = parseFloat(tr.y || "0");
+    if (isNaN(x) || isNaN(y)) return;
+
+    const angleDeg = parseFloat(tr.angle || "0");
+    const angleRad = angleDeg * Math.PI / 180.0;
+
+    // tipo: straight, curve, buffer, etc.
+    const t = (tr.type || "straight").toLowerCase();
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angleRad);
+
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#444";  // cor da via
+
+    ctx.beginPath();
+
+    if (t === "curve") {
+      // Curva simples, arco de 90º por exemplo
+      ctx.arc(0, 0, 30, 0, Math.PI / 2);
+    } else {
+      // Reta genérica
+      ctx.moveTo(-30, 0);
+      ctx.lineTo(30, 0);
+    }
+
+    ctx.stroke();
+
+    // Buffer (se for esse o tipo, podes acrescentar símbolo)
+    if (t === "buffer") {
+      ctx.beginPath();
+      ctx.moveTo(25, -8);
+      ctx.lineTo(25, 8);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  });
+
+  // --- desenhar blocos (ROIs) ---
+  for (const [name, pts] of Object.entries(BLOCK_ROIS)) {
+    if (!pts || pts.length < 3) continue;
+    const occupied = !!BLOCK_STATES[name];
+
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = occupied ? "rgba(239,68,68,0.85)" : "rgba(34,197,94,0.85)";
+
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) {
+      ctx.lineTo(pts[i][0], pts[i][1]);
+    }
+    ctx.closePath();
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(15,23,42,0.8)";
+    ctx.font = "12px sans-serif";
+    ctx.fillText(name, pts[0][0] + 5, pts[0][1] - 5);
+  }
+
+  // --- desenhar agulhas (switches) ---
+  SWITCHES.forEach(sw => {
+    const id = sw.id || "?";
+    const x_raw = parseFloat(sw.x || "0");
+    const y_raw = parseFloat(sw.y || "0");
+
+    if (isNaN(x_raw) || isNaN(y_raw)) return;
+
+    const x = x_raw * SWITCH_SCALE_X;
+    const y = y_raw * SWITCH_SCALE_Y;
+
+    const radius = 7;
+
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, 2 * Math.PI);
+    ctx.fillStyle = "rgba(59,130,246,0.9)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = "rgba(15,23,42,0.9)";
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.font = "10px sans-serif";
+    ctx.fillText(id, x + radius + 2, y + 3);
+  });
+}
+
+
+// Clique no mapa: tenta encontrar uma agulha perto do clique
+function onCanvasClick(evt) {
+  const rect = canvas.getBoundingClientRect();
+  const clickX = evt.clientX - rect.left;
+  const clickY = evt.clientY - rect.top;
+
+  let closest = null;
+  let minDist = 999999;
+
+  SWITCHES.forEach(sw => {
+    const x_raw = parseFloat(sw.x || "0");
+    const y_raw = parseFloat(sw.y || "0");
+    if (isNaN(x_raw) || isNaN(y_raw)) return;
+
+    const sx = x_raw * SWITCH_SCALE_X;
+    const sy = y_raw * SWITCH_SCALE_Y;
+
+    const dx = sx - clickX;
+    const dy = sy - clickY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+
+    if (dist < minDist) {
+      minDist = dist;
+      closest = sw;
+    }
+  });
+
+  if (closest && minDist < 20) {
+    // Se o clique estiver perto o suficiente, perguntamos o comando
+    const id = closest.id;
+    const choice = prompt(`Switch ${id}: escrever "straight" ou "turnout"`, "turnout");
+    if (choice) {
+      sendSwitchCommand(id, choice);
+    }
+  }
+}
+
+async function sendSwitchCommand(id, cmd) {
+  try {
+    await fetch("{{ url_for('home_blueprint.api_rocrail_switch') }}", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ id, cmd })
+    });
+  } catch (e) {
+    console.error("Erro ao enviar comando de switch:", e);
+  }
+}
+
+// ---- Carregar ROIs ----
+async function reloadLayout() {
+  try {
+    const roisUrl = "{{ url_for('static', filename='layouts/rois.json') }}";
+    const rois = await fetch(roisUrl).then(r => r.json());
+    BLOCK_ROIS = rois;
+    drawMap();
+  } catch (e) {
+    console.error("Erro a carregar rois.json:", e);
+  }
+}
+
+// ---- Carregar Switches ----
+
+async function reloadSwitchPositions() {
+  try {
+    const res = await fetch("{{ url_for('home_blueprint.api_switch_positions') }}");
+    SWITCH_POS = await res.json();
+    drawMap();
+  } catch (e) {
+    console.error("Erro a carregar switch_positions:", e);
+  }
+}
+
+
+
+async function reloadSwitches() {
+  try {
+    const res = await fetch("{{ url_for('home_blueprint.api_rocrail_switches') }}");
+    SWITCHES = await res.json();
+    drawMap();
+    renderSwitchesList();
+  } catch (e) {
+    console.error("Erro a carregar switches:", e);
+  }
+}
+
+async function reloadTracks() {
+  try {
+    const res = await fetch("{{ url_for('home_blueprint.api_rocrail_tracks') }}");
+    TRACKS = await res.json();
+    drawMap();
+  } catch (e) {
+    console.error("Erro a carregar tracks do Rocrail:", e);
+  }
+}
+
+
+// ---- Lista lateral de blocos ----
+async function refreshBlocks() {
+  try {
+    const res = await fetch("{{ url_for('home_blueprint.api_blocks') }}");
+    BLOCK_STATES = await res.json();
+    drawMap();
+
+    const container = document.getElementById("blocksList");
+    container.innerHTML = "";
+    const names = Object.keys(BLOCK_STATES).sort();
+
+    if (!names.length) {
+      container.textContent = "Nenhum bloco definido (usa o ROI Editor).";
+      return;
+    }
+
+    names.forEach(name => {
+      const occ = !!BLOCK_STATES[name];
+      const row = document.createElement("div");
+      row.className = "d-flex justify-content-between align-items-center mb-1";
+      row.innerHTML = `
+        <span>${name}</span>
+        <span class="badge ${occ ? 'bg-danger-soft text-danger' : 'bg-success-soft text-success'}">
+          ${occ ? 'OCCUPIED' : 'FREE'}
+        </span>
+      `;
+      container.appendChild(row);
+    });
+  } catch (e) {
+    console.error("Erro em /api/blocks:", e);
+  }
+}
+
+// ---- Lista lateral de agulhas ----
+function renderSwitchesList() {
+  const container = document.getElementById("switchesList");
+  container.innerHTML = "";
+
+  if (!SWITCHES.length) {
+    container.textContent = "Nenhuma agulha encontrada no plan.xml.";
+    return;
+  }
+
+SWITCHES.forEach(sw => {
+  const id = sw.id || "?";
+
+  // se houver override em SWITCH_POS, usamos isso
+  let x, y;
+  if (SWITCH_POS[id]) {
+    x = SWITCH_POS[id][0];
+    y = SWITCH_POS[id][1];
+  } else {
+    const x_raw = parseFloat(sw.x || "0");
+    const y_raw = parseFloat(sw.y || "0");
+    x = isNaN(x_raw) ? 50 : x_raw;
+    y = isNaN(y_raw) ? 50 : y_raw;
+  }
+
+  const radius = 7;
+
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, 2 * Math.PI);
+  ctx.fillStyle = "rgba(59,130,246,0.9)";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(15,23,42,0.9)";
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.font = "10px sans-serif";
+  ctx.fillText(id, x + radius + 2, y + 3);
+});
+
+    row.className = "d-flex justify-content-between align-items-center mb-1";
+
+    const label = document.createElement("span");
+    label.textContent = `${id}${desc ? " ? " + desc : ""}`;
+
+    const btnGroup = document.createElement("div");
+    btnGroup.className = "btn-group btn-group-xs";
+
+    const btnStraight = document.createElement("button");
+    btnStraight.className = "btn btn-outline-secondary btn-sm";
+    btnStraight.textContent = "Straight";
+    btnStraight.onclick = () => sendSwitchCommand(id, "straight");
+
+    const btnTurnout = document.createElement("button");
+    btnTurnout.className = "btn btn-outline-secondary btn-sm";
+    btnTurnout.textContent = "Turnout";
+    btnTurnout.onclick = () => sendSwitchCommand(id, "turnout");
+
+    btnGroup.appendChild(btnStraight);
+    btnGroup.appendChild(btnTurnout);
+
+    row.appendChild(label);
+    row.appendChild(btnGroup);
+    container.appendChild(row);
+  });
+
+
+
+}
+
+// ---- Ciclos ----
+setInterval(refreshBlocks, 1000);
+
+window.addEventListener("load", () => {
+  const img = document.getElementById("layoutImg");
+  if (img.complete) {
+    initMap();
+  } else {
+    img.onload = initMap;
+  }
+  reloadLayout();
+  reloadSwitches();
+  reloadTracks(); 
+  refreshBlocks();
+});
+
+window.addEventListener("load", () => {
+  // ...
+  reloadSwitches();
+  reloadSwitchPositions();
+  // ...
+});
+
+
+</script>
+
+{% endblock content %}

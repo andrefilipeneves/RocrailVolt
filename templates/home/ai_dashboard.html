@@ -1,0 +1,231 @@
+{% extends "layouts/base.html" %}
+{% block title %}AI Dashboard{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+
+  <!-- COLUNA ESQUERDA: VÍDEO + MAPA -->
+  <div class="col-12 col-xl-8">
+
+    <!-- CARD: VÍDEO YOLO -->
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">YOLO Camera</h2>
+          <small class="text-muted">Deteção em tempo real</small>
+        </div>
+      </div>
+      <div class="card-body text-center">
+        <!-- Stream MJPEG ou similar vindo da tua rota de vídeo -->
+<img src="{{ url_for('home_blueprint.yolo_stream') }}"
+     alt="YOLO Stream"
+     class="img-fluid border rounded" />
+
+
+      </div>
+    </div>
+
+    <!-- CARD: MINI MAPA VISUAL (ROIs) -->
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h6 mb-0">Mini-Mapa (ROIs + YOLO)</h2>
+          <small class="text-muted">
+            Mapa esquemático baseado no rois.json e estado de blocos.
+          </small>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="reloadMiniMap()">
+          Reload ROIs
+        </button>
+      </div>
+      <div class="card-body text-center">
+        <div id="miniMapContainer" style="position:relative; display:inline-block;">
+          <canvas id="miniMapCanvas"
+                  style="border-radius:0.5rem; border:1px solid rgba(148,163,184,0.4);">
+          </canvas>
+        </div>
+        <small class="text-muted d-block mt-2">
+          Fonte: <code>static/layouts/rois.json</code> + <code>/api/blocks</code>.
+        </small>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- COLUNA DIREITA: ESTATÍSTICAS / INFO -->
+  <div class="col-12 col-xl-4">
+
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Estado dos Blocos</h2>
+        <small class="text-muted">Atualiza a cada 1s</small>
+      </div>
+      <div class="card-body">
+        <div id="blocksStatusList" class="small text-muted">
+          A carregar estados dos blocos?
+        </div>
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Debug / Info</h2>
+      </div>
+      <div class="card-body">
+        <pre id="debugJson"
+             class="small bg-dark text-light rounded p-2"
+             style="max-height:200px; overflow-y:auto;"></pre>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let MINI_CANVAS, MINI_CTX;
+let MINI_WIDTH = 600;
+let MINI_HEIGHT = 350;
+
+let MINI_ROIS = {};   // nome_do_bloco -> lista de [x,y]
+let MINI_BLOCKS = {}; // estado vindo de /api/blocks
+
+// Normaliza as coordenadas do rois.json para caberem no mini-mapa
+function computeMiniBounds() {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const pts of Object.values(MINI_ROIS)) {
+    pts.forEach(p => {
+      const x = p[0];
+      const y = p[1];
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    });
+  }
+  if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY)) {
+    return {minX:0, minY:0, maxX:1, maxY:1};
+  }
+  return {minX, minY, maxX, maxY};
+}
+
+function drawMiniMap() {
+  if (!MINI_CTX || !MINI_CANVAS) return;
+MINI_CTX.fillStyle = "#f9fafb"; // fundo claro
+MINI_CTX.fillRect(0, 0, MINI_CANVAS.width, MINI_CANVAS.height);
+
+  const {minX, minY, maxX, maxY} = computeMiniBounds();
+  const dx = maxX - minX;
+  const dy = maxY - minY;
+
+  const margin = 20;
+  const availW = MINI_CANVAS.width - 2 * margin;
+  const availH = MINI_CANVAS.height - 2 * margin;
+  const scale = Math.min(
+    dx > 0 ? (availW / dx) : 1,
+    dy > 0 ? (availH / dy) : 1
+  );
+
+  // Fundo
+  MINI_CTX.fillStyle = "#0f172a";
+  MINI_CTX.fillRect(0, 0, MINI_CANVAS.width, MINI_CANVAS.height);
+
+  // Desenhar cada ROI como polígono
+  for (const [name, pts] of Object.entries(MINI_ROIS)) {
+    if (!pts || pts.length < 3) continue;
+    const occupied = !!MINI_BLOCKS[name];
+
+    // cor do contorno conforme estado
+    MINI_CTX.strokeStyle = occupied ? "rgba(239,68,68,0.9)" : "rgba(34,197,94,0.9)";
+    MINI_CTX.lineWidth = 3;
+
+    MINI_CTX.beginPath();
+    pts.forEach((p, idx) => {
+      const xNorm = (p[0] - minX) * scale + margin;
+      const yNorm = (p[1] - minY) * scale + margin;
+      if (idx === 0) {
+        MINI_CTX.moveTo(xNorm, yNorm);
+      } else {
+        MINI_CTX.lineTo(xNorm, yNorm);
+      }
+    });
+    MINI_CTX.closePath();
+    MINI_CTX.stroke();
+
+    // Label
+    MINI_CTX.font = "11px sans-serif";
+    MINI_CTX.fillStyle = "#e5e7eb";
+    // usar o primeiro ponto para posição da label
+    const labelX = (pts[0][0] - minX) * scale + margin + 4;
+    const labelY = (pts[0][1] - minY) * scale + margin - 4;
+    MINI_CTX.fillText(name, labelX, labelY);
+  }
+}
+
+// Carrega o rois.json
+async function reloadMiniMap() {
+  try {
+    const roisUrl = "{{ url_for('static', filename='layouts/rois.json') }}";
+    const data = await fetch(roisUrl).then(r => r.json());
+    MINI_ROIS = data;
+    drawMiniMap();
+  } catch (e) {
+    console.error("Erro ao carregar rois.json:", e);
+  }
+}
+
+// Atualiza estados dos blocos / lista lateral
+async function refreshBlocksStatus() {
+  try {
+    const res = await fetch("{{ url_for('home_blueprint.api_blocks') }}");
+    const data = await res.json();
+    MINI_BLOCKS = data;
+    drawMiniMap();
+
+    // Atualizar lista textual
+    const container = document.getElementById("blocksStatusList");
+    container.innerHTML = "";
+    const names = Object.keys(data).sort();
+
+    if (!names.length) {
+      container.textContent = "Nenhum bloco definido (usa o ROI Editor).";
+      return;
+    }
+
+    names.forEach(name => {
+      const occ = !!data[name];
+      const row = document.createElement("div");
+      row.className = "d-flex justify-content-between align-items-center mb-1";
+      row.innerHTML = `
+        <span>${name}</span>
+        <span class="badge ${occ ? 'bg-danger' : 'bg-success'}">
+          ${occ ? 'OCCUPIED' : 'FREE'}
+        </span>
+      `;
+      container.appendChild(row);
+    });
+
+    // Debug JSON
+    document.getElementById("debugJson").textContent = JSON.stringify(data, null, 2);
+
+  } catch (e) {
+    console.error("Erro em /api/blocks:", e);
+  }
+}
+
+// Inicialização do mini-mapa
+window.addEventListener("load", () => {
+  MINI_CANVAS = document.getElementById("miniMapCanvas");
+  MINI_CTX = MINI_CANVAS.getContext("2d");
+
+  // tamanho base; podes ajustar conforme o layout
+  MINI_CANVAS.width = MINI_WIDTH;
+  MINI_CANVAS.height = MINI_HEIGHT;
+
+  reloadMiniMap();
+  refreshBlocksStatus();
+  setInterval(refreshBlocksStatus, 1000);
+});
+</script>
+
+{% endblock content %}

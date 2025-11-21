@@ -1,0 +1,248 @@
+{% extends "layouts/base.html" %}
+{% block title %}Fleet{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+
+  <div class="col-12 col-xl-7">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">Locomotivas (plan.xml)</h2>
+          <small class="text-muted">Lista lida diretamente do plan.xml do Rocrail.</small>
+        </div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="reloadPlan()">
+          Reload plan.xml
+        </button>
+      </div>
+
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-hover table-sm mb-0 align-middle">
+            <thead class="thead-light">
+              <tr>
+                <th>ID</th>
+                <th>Descrição</th>
+                <th>Addr</th>
+                <th>Prot</th>
+                <th>Max V</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="locosTableBody">
+              {% for loco in locos %}
+              <tr onclick="selectLoco('{{ loco.id }}')" style="cursor:pointer;">
+                <td>{{ loco.id }}</td>
+                <td>{{ loco.desc or '-' }}</td>
+                <td>{{ loco.addr or '-' }}</td>
+                <td>{{ loco.protocol or '-' }}</td>
+                <td>{{ loco.max_speed or '-' }}</td>
+                <td>
+                  <button class="btn btn-xs btn-outline-primary" onclick="event.stopPropagation(); openControl('{{ loco.id }}')">
+                    Control
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+              {% if locos|length == 0 %}
+              <tr>
+                <td colspan="6" class="text-center text-muted py-3">
+                  Nenhuma loco encontrada em plan.xml (confirma caminho em <code>rocrail_plan.py</code>).
+                </td>
+              </tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-5">
+    <div class="card border-0 shadow-sm mb-3">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Detalhes & Controlo</h2>
+      </div>
+      <div class="card-body">
+
+        <div class="mb-2">
+          <label class="form-label">Loco selecionada</label>
+          <input type="text" id="selectedLocoId" class="form-control form-control-sm" readonly>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label">Speed (%)</label>
+          <div class="input-group input-group-sm">
+            <input type="number" id="fleetSpeedInput" class="form-control" value="40" min="0" max="100">
+            <button class="btn btn-outline-secondary" type="button" onclick="fleetSetSpeed()">Set</button>
+          </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 mb-3">
+          <button class="btn btn-sm btn-primary" onclick="fleetGo()">
+            <span class="fas fa-play me-1"></span> GO
+          </button>
+          <button class="btn btn-sm btn-danger" onclick="fleetStop()">
+            <span class="fas fa-stop me-1"></span> STOP
+          </button>
+        </div>
+
+        <hr>
+
+        <div>
+          <h3 class="h6">Funções (F0, F1, ?)</h3>
+          <div id="functionsList" class="small text-muted">
+            Seleciona uma loco para ver funções definidas no plan.xml.
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h2 class="h6 mb-0">Debug JSON (plan)</h2>
+        <button class="btn btn-sm btn-outline-secondary" onclick="togglePlanJson()">Mostrar/Esconder</button>
+      </div>
+      <div class="card-body" id="planJsonBox" style="display:none;">
+        <pre id="planJson" class="small bg-dark text-light rounded p-2" style="max-height: 220px; overflow-y: auto;"></pre>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<script>
+let PLAN_CACHE = null;
+
+// seleciona loco na UI
+function selectLoco(locoId) {
+  document.getElementById("selectedLocoId").value = locoId;
+  renderFunctionsForLoco(locoId);
+}
+
+// botão ?Control?
+function openControl(locoId) {
+  selectLoco(locoId);
+  document.getElementById("fleetSpeedInput").focus();
+}
+
+async function reloadPlan() {
+  const res = await fetch("{{ url_for('home_blueprint.api_rocrail_plan') }}");
+  const data = await res.json();
+  PLAN_CACHE = data;
+
+  // mostrar JSON bruto
+  const pre = document.getElementById("planJson");
+  pre.textContent = JSON.stringify(data, null, 2);
+
+  // (opcional) recarregar tabela via JS; por agora confiamo-nos no render do servidor
+  console.log("[FLEET] plan reloaded", data);
+}
+
+// mostra / esconde JSON
+function togglePlanJson() {
+  const box = document.getElementById("planJsonBox");
+  box.style.display = (box.style.display === "none" || box.style.display === "") ? "block" : "none";
+}
+
+// devolve loco pelos dados do cache
+function getLocoFromCache(locoId) {
+  if (!PLAN_CACHE) return null;
+  const locos = PLAN_CACHE.locos || [];
+  return locos.find(lc => lc.id === locoId) || null;
+}
+
+function renderFunctionsForLoco(locoId) {
+  const container = document.getElementById("functionsList");
+  if (!PLAN_CACHE) {
+    container.textContent = "Carrega o plano (Reload) primeiro.";
+    return;
+  }
+  const loco = getLocoFromCache(locoId);
+  if (!loco) {
+    container.textContent = "Loco não encontrada no plano.";
+    return;
+  }
+
+  const fns = loco.functions || [];
+  if (!fns.length) {
+    container.textContent = "Nenhuma função definida para esta loco no plan.xml.";
+    return;
+  }
+
+  container.innerHTML = "";
+  fns.forEach(fn => {
+    const no = fn.no || "?";
+    const text = fn.text || "(sem nome)";
+    const btnId = `fn-btn-${loco.id}-${no}`;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "d-flex justify-content-between align-items-center mb-1";
+
+    const label = document.createElement("span");
+    label.textContent = `F${no} ? ${text}`;
+
+    const btn = document.createElement("button");
+    btn.className = "btn btn-xs btn-outline-primary";
+    btn.id = btnId;
+    btn.textContent = "ON";
+    btn.dataset.state = "off";
+
+    btn.onclick = async () => {
+      const newState = btn.dataset.state === "off";
+      await fetch("{{ url_for('home_blueprint.api_train_function') }}", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          loco_id: loco.id,
+          fn_no: no,
+          state: newState
+        })
+      });
+      btn.dataset.state = newState ? "on" : "off";
+      btn.textContent = newState ? "OFF" : "ON";
+      btn.className = newState ? "btn btn-xs btn-primary" : "btn btn-xs btn-outline-primary";
+    };
+
+    wrapper.appendChild(label);
+    wrapper.appendChild(btn);
+    container.appendChild(wrapper);
+  });
+}
+
+// Controlo de velocidade usando as APIs que já tens
+async function fleetStop() {
+  const locoId = document.getElementById("selectedLocoId").value;
+  if (!locoId) return alert("Seleciona primeiro uma locomotiva.");
+  await fetch("{{ url_for('home_blueprint.api_train_stop') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ loco_id: locoId })
+  });
+}
+
+async function fleetGo() {
+  const locoId = document.getElementById("selectedLocoId").value;
+  const speed = parseInt(document.getElementById("fleetSpeedInput").value || "40");
+  if (!locoId) return alert("Seleciona primeiro uma locomotiva.");
+  await fetch("{{ url_for('home_blueprint.api_train_go') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ loco_id: locoId, speed: speed })
+  });
+}
+
+async function fleetSetSpeed() {
+  // igual ao GO, mas semanticamente podes chamar quando só queres mudar valor
+  await fleetGo();
+}
+
+// carregar plano ao abrir a página
+window.addEventListener("load", reloadPlan);
+</script>
+
+{% endblock content %}

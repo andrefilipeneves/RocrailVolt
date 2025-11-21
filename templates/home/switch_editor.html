@@ -1,0 +1,178 @@
+{% extends "layouts/base.html" %}
+{% block title %}Switch Editor{% endblock title %}
+
+{% block content %}
+
+<div class="row g-3">
+  <div class="col-12 col-xl-8">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>
+          <h2 class="h5 mb-0">Editor de Agulhas</h2>
+          <small class="text-muted">
+            Clica no mapa para reposicionar a agulha selecionada.
+          </small>
+        </div>
+        <div>
+          <button class="btn btn-sm btn-outline-secondary" onclick="reloadSwitches()">Reload</button>
+          <button class="btn btn-sm btn-primary" onclick="savePositions()">Gravar</button>
+        </div>
+      </div>
+      <div class="card-body text-center">
+        <div id="switchEditorContainer" style="position:relative; display:inline-block;">
+          <!-- se usares uma imagem de fundo (ex. cs3_layout.png), mete-a aqui -->
+          <!-- ou deixa só o canvas com fundo neutro -->
+
+          <canvas id="switchEditorCanvas"
+                  style="border-radius:0.5rem; border:1px solid rgba(148,163,184,0.4);">
+          </canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-4">
+    <div class="card border-0 shadow-sm">
+      <div class="card-header">
+        <h2 class="h6 mb-0">Lista de Agulhas</h2>
+      </div>
+      <div class="card-body">
+        <div id="switchList" class="small" style="max-height:300px; overflow-y:auto;"></div>
+        <hr>
+        <pre id="switchPosJson"
+             class="small bg-dark text-light rounded p-2"
+             style="max-height:200px; overflow-y:auto;"></pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let SW_CANVAS, SW_CTX;
+let SW_WIDTH = 800;
+let SW_HEIGHT = 500;
+
+let SWITCHES = [];         // vindo de /api/rocrail/switches
+let SWITCH_POS = {};       // vindo de /api/switch-positions
+let SELECTED_ID = null;
+
+function initSwitchEditor() {
+  SW_CANVAS = document.getElementById("switchEditorCanvas");
+  SW_CTX = SW_CANVAS.getContext("2d");
+
+  SW_CANVAS.width = SW_WIDTH;
+  SW_CANVAS.height = SW_HEIGHT;
+
+  SW_CANVAS.addEventListener("click", onCanvasClick);
+
+  reloadSwitches();
+}
+
+async function reloadSwitches() {
+  // Lê agulhas do Rocrail
+  const swRes = await fetch("{{ url_for('home_blueprint.api_rocrail_switches') }}");
+  SWITCHES = await swRes.json();
+
+  // Lê posições salvas (ou default gerado)
+  const posRes = await fetch("{{ url_for('home_blueprint.api_switch_positions') }}");
+  SWITCH_POS = await posRes.json();
+
+  if (!SELECTED_ID && SWITCHES.length > 0) {
+    SELECTED_ID = SWITCHES[0].id;
+  }
+
+  renderSwitchList();
+  drawSwitches();
+  updateJsonPreview();
+}
+
+function renderSwitchList() {
+  const cont = document.getElementById("switchList");
+  cont.innerHTML = "";
+
+  if (!SWITCHES.length) {
+    cont.textContent = "Nenhuma agulha encontrada em plan.xml.";
+    return;
+  }
+
+  SWITCHES.forEach(sw => {
+    const id = sw.id || "?";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn btn-sm w-100 mb-1 " + (id === SELECTED_ID ? "btn-primary" : "btn-outline-secondary");
+    btn.textContent = id + (sw.desc ? " ? " + sw.desc : "");
+    btn.onclick = () => {
+      SELECTED_ID = id;
+      renderSwitchList();
+      drawSwitches();
+    };
+    cont.appendChild(btn);
+  });
+}
+
+function drawSwitches() {
+  if (!SW_CTX) return;
+
+  SW_CTX.clearRect(0, 0, SW_CANVAS.width, SW_CANVAS.height);
+
+  // fundo claro
+  SW_CTX.fillStyle = "#f9fafb";
+  SW_CTX.fillRect(0, 0, SW_CANVAS.width, SW_CANVAS.height);
+
+  SWITCHES.forEach(sw => {
+    const id = sw.id || "?";
+    const pos = SWITCH_POS[id] || [50, 50];
+    const x = pos[0];
+    const y = pos[1];
+
+    const radius = 8;
+
+    SW_CTX.beginPath();
+    SW_CTX.arc(x, y, radius, 0, 2 * Math.PI);
+    SW_CTX.fillStyle = id === SELECTED_ID ? "rgba(59,130,246,0.95)" : "rgba(148,163,184,0.95)";
+    SW_CTX.fill();
+    SW_CTX.lineWidth = 2;
+    SW_CTX.strokeStyle = "rgba(15,23,42,0.9)";
+    SW_CTX.stroke();
+
+    SW_CTX.fillStyle = "#0f172a";
+    SW_CTX.font = "11px sans-serif";
+    SW_CTX.fillText(id, x + radius + 4, y + 4);
+  });
+}
+
+function onCanvasClick(ev) {
+  if (!SELECTED_ID) return;
+
+  const rect = SW_CANVAS.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const y = ev.clientY - rect.top;
+
+  SWITCH_POS[SELECTED_ID] = [x, y];
+  drawSwitches();
+  updateJsonPreview();
+}
+
+function updateJsonPreview() {
+  document.getElementById("switchPosJson").textContent =
+    JSON.stringify(SWITCH_POS, null, 2);
+}
+
+async function savePositions() {
+  const res = await fetch("{{ url_for('home_blueprint.api_switch_positions') }}", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(SWITCH_POS)
+  });
+  const data = await res.json();
+  if (data.status === "ok") {
+    alert("Posições das agulhas gravadas com sucesso.");
+  } else {
+    alert("Erro ao gravar: " + (data.error || "desconhecido"));
+  }
+}
+
+window.addEventListener("load", initSwitchEditor);
+</script>
+
+{% endblock content %}
